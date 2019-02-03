@@ -1,0 +1,30 @@
+#stop all containers
+docker stop $(docker ps -a -q)
+
+#remove all containers
+docker rm $(docker ps -a -q)
+
+#remove all images
+docker rmi $(docker images -q)
+
+### Based on Packt Docker on Amazon Web Services
+#build Docker image
+docker build --target test -t todobackend-test .
+docker build -t todobackend-release .
+
+#run the application packaged from Dockerfile
+docker run -it --rm -p 8000:8000 todobackend-release uwsgi \
+    --http=0.0.0.0:8000 --module=todobackend.wsgi --master
+
+#using docker-compose
+docker-compose build
+docker-compose build test
+docker-compose run test
+# generalisation: docker-compose up <name_of_service>
+docker-compose up release
+docker-compose up migrate
+#collect django REST API static files
+docker-compose run app python3 manage.py collectstatic --no-input
+docker-compose up app
+docker-compose up acceptance
+docker-compose down -v
