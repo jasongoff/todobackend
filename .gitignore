@@ -11,3 +11,6 @@ __pycache__
 
 # Miscellaneous
 .DS_Store
+manifest.json
+
+

@@ -1,0 +1,43 @@
+{
+  "variables": {
+    "aws_access_key_id": "{{env `AWS_ACCESS_KEY_ID`}}",
+    "aws_secret_access_key": "{{env `AWS_SECRET_ACCESS_KEY`}}",
+    "aws_session_token": "{{env `AWS_SESSION_TOKEN`}}",
+    "timezone": "US/Eastern"
+  },
+  "builders": [
+    {
+      "type": "amazon-ebs",
+      "access_key": "{{user `aws_access_key_id`}}",
+      "secret_key": "{{user `aws_secret_access_key`}}",
+      "token": "{{user `aws_session_token`}}",
+      "region": "us-east-1",
+      "source_ami": "ami-0bf2fb355727b7faf",
+      "instance_type": "t2.micro",
+      "ssh_username": "ec2-user",
+      "associate_public_ip_address": "true",
+      "ami_name": "docker-in-aws-ecs {{timestamp}}",
+      "tags": {
+        "Name": "Docker in AWS ECS Base Image 2017.09.h",
+        "SourceAMI": "{{ .SourceAMI }}",
+        "DockerVersion": "17.09.1-ce",
+        "ECSAgentVersion": "1.17.0-2"
+      }
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "sudo yum -y -x docker\\* -x ecs\\* update"
+      ]
+    }
+  ],
+  "post-processors": [
+    {
+      "type": "manifest",
+      "output": "manifest.json",
+      "strip_path": true
+    }
+  ]
+}
