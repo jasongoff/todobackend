@@ -41,7 +41,7 @@
     {
       "type": "shell",
       "script": "scripts/time.sh",
-      "envrionment_vars": [
+      "environment_vars": [
         "TIMEZONE={{user `timezone`}}"
       ]
     },

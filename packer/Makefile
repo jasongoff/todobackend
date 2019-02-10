@@ -2,8 +2,8 @@
 .ONESHELL:
 
 build:
-  # @ $(if $(AWS_PROFILE),$(call assume_role))
-  packer build packer.json
+	# @ $(if $(AWS_PROFILE),$(call assume_role))
+	packer build packer.json
 
 # Dynamically assumes role and injects credentials into environment
 define assume_role
