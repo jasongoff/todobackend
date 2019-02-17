@@ -25,14 +25,33 @@ Parameters:
     NoEcho: "true"
 
 Resources:
+  ApplicationService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ApplicationAutoscaling
+      - ApplicationLogGroup
+      - ApplicationLoadBalancerHttpListener
+    Properties:
+      TaskDefinition: !Ref ApplicationTaskDefinition
+      Cluster: !Ref ApplicationCluster
+      DesiredCount: !Ref ApplicationDesiredCount
+      LoadBalancers:
+        - ContainerName: todobackend
+          ContainerPort: 8000
+          TargetGroupArn: !Ref ApplicationServiceTargetGroup
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazon.com/AWSServiceRoleForECS
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+
   ApplicationTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: todobackend
       Volumes:
         - Name: public
-      Host:
-        SourcePath: /data/public
+          Host:
+            SourcePath: /data/public
       ContainerDefinitions:
         - Name: todobackend
           Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/docker-in-aws/todobackend:${ApplicationImageTag}
