@@ -32,7 +32,7 @@ Resources:
       - ApplicationAutoscaling
       - ApplicationDatabase
     Properties:
-      ServiceToken: Sub ${EcsTaskRunnerLambda.Arn}
+      ServiceToken: !Sub ${EcsTaskRunnerLambda.Arn}
       Cluster: !Ref ApplicationCluster
       TaskDefinition: !Ref MigrateTaskDefinition
 
