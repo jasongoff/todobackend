@@ -26,6 +26,18 @@ Parameters:
 
 Resources:
 
+  ApplicationCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Todobackend Credentials
+      KmsKeyId: alias/secrets-key
+      Name: todobackend/credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: "MYSQL_PASSWORD"
+        PasswordLength: 12
+        ExcludeCharacters: '"@/\'
+
   MigrateTask:
     Type: AWS::CloudFormation::CustomResource
     DependsOn:
