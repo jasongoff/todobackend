@@ -304,14 +304,34 @@ Resources:
       TaskDefinition: !Ref ApplicationTaskDefinition
       Cluster: !Ref ApplicationCluster
       DesiredCount: !Ref ApplicationDesiredCount
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - Ref: ApplicationSecurityGroup
+          Subnets:
+            - Ref: PrivateSubnet 
       LoadBalancers:
         - ContainerName: todobackend
           ContainerPort: 8000
           TargetGroupArn: !Ref ApplicationServiceTargetGroup
-      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 100
+
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${AWS::StackName} Application Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
 
   ApplicationTaskRole:
     Type: AWS::IAM::Role
@@ -344,6 +364,7 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: todobackend
+      NetworkMode: awsvpc
       TaskRoleArn: !Sub ${ApplicationTaskRole.Arn}
       Volumes:
         - Name: public
@@ -379,7 +400,6 @@ Resources:
             - --check-static=/public
           PortMappings:
             - ContainerPort: 8000
-              HostPort: 0
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -431,6 +451,7 @@ Resources:
       Protocol: HTTP
       Port: 8000
       VpcId: !Ref VpcId
+      TargetType: ip
       TargetGroupAttributes:
         - Key: deregistration_delay.timeout_seconds
           Value: 30
@@ -468,19 +489,19 @@ Resources:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       IpProtocol: tcp
-      FromPort: 32768
-      ToPort: 60999
-      GroupId: !Ref ApplicationAutoscalingSecurityGroup
+      FromPort: 8000
+      ToPort: 8000
+      GroupId: !Ref ApplicationSecurityGroup
       SourceSecurityGroupId: !Ref ApplicationLoadBalancerSecurityGroup
 
   ApplicationLoadBalancerToApplicationEgress:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
       IpProtocol: tcp
-      FromPort: 32768
-      ToPort: 60999
+      FromPort: 8000
+      ToPort: 8000
       GroupId: !Ref ApplicationLoadBalancerSecurityGroup
-      DestinationSecurityGroupId: !Ref ApplicationAutoscalingSecurityGroup
+      DestinationSecurityGroupId: !Ref ApplicationSecurityGroup
 
   ApplicationDatabase:
     Type: AWS::RDS::DBInstance
@@ -533,7 +554,7 @@ Resources:
       FromPort: 3306
       ToPort: 3306
       GroupId: !Ref ApplicationDatabaseSecurityGroup
-      SourceSecurityGroupId: !Ref ApplicationAutoscalingSecurityGroup
+      SourceSecurityGroupId: !Ref ApplicationSecurityGroup
 
   ApplicationToApplicationDatabaseEgress:
     Type: AWS::EC2::SecurityGroupEgress
@@ -541,7 +562,7 @@ Resources:
       IpProtocol: tcp
       FromPort: 3306
       ToPort: 3306
-      GroupId: !Ref ApplicationAutoscalingSecurityGroup
+      GroupId: !Ref ApplicationSecurityGroup
       DestinationSecurityGroupId: !Ref ApplicationDatabaseSecurityGroup        
 
   ApplicationAutoscalingSecurityGroup:
