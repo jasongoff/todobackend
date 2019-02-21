@@ -28,3 +28,10 @@ docker-compose run app python3 manage.py collectstatic --no-input
 docker-compose up app
 docker-compose up acceptance
 docker-compose down -v
+
+#using gmake
+gmake login
+gmake test
+gmake release
+gmake publish
+gmake clean
