@@ -781,6 +781,60 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${AWS::StackName}-lifecycleHooks
       RetentionInDays: 7
+  LifecycleHookPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LifecycleHookFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref LifecycleHookTopic
+  LifecycleFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      Policies:
+        - PolicyName: LifecycleHookPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListContainerInstances
+                Effect: Allow
+                Action:
+                  - ecs:ListContainerInstances
+                Resource: !Sub ${ApplicationCluster.Arn}
+              - Sid: ManageContainerInstances
+                Effect: Allow
+                Action:
+                  - ecs:DescribeContainerInstances
+                  - ecs:UpdateContainerInstancesState
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub ${ApplicationCluster.Arn}
+              - Sid: Publish
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref LifecycleHookTopic
+              - Sid: CompleteLifecycleAction
+                Effect: Allow
+                Action:
+                  - autoscaling:CompleteLifecycleAction
+                Resource: !Sub arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${ApplicationAutoscaling}
+              - Sid: ManageLambdaLogs
+                Effect: Allow
+                Action:
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+                Resource: !Sub ${LifecycleHookFunctionLogGroup.Arn}
+
 
 Outputs:
   PublicURL:
