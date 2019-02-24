@@ -581,6 +581,12 @@ Resources:
       ResourceSignal:
         Count: !Ref ApplicationDesiredCount
         Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: !Ref ApplicationDesiredCount
+        MinSuccessfulInstancesPercent: 100
+        WaitOnResourceSignals: "true"
+        PauseTime: PT15M
     Properties:
       LaunchConfigurationName: !Ref ApplicationAutoscalingLaunchConfiguration
       MinSize: 0
@@ -642,6 +648,139 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                 Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${AWS::StackName}*
+
+  LifecycleHook:
+    Type: AWS::AutoScaling::LifecycleHook
+    Properties:
+      RoleARN: !Sub ${LifecycleHookRole.Arn}
+      AutoScalingGroupName: !Ref ApplicationAutoscaling
+      DefaultResult: CONTINUE
+      HeartbeatTimeout: 900
+      LifecycleTransition: autoscaling:EC2_INSTANCE_TERMINATING
+      NotificationTargetARN: !Ref LifecycleHookTopic
+  LifecycleHookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: autoscaling.amazonaws.com
+      Policies:
+        - PolicyName: LifecycleHookPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishNotifications
+                Action: 
+                  - sns:Publish
+                Effect: Allow
+                Resource: !Ref LifecycleHookTopic
+  LifecycleHookTopic:
+    Type: AWS::SNS::Topic
+    Properties: {}
+  LifecycleHookSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Sub ${LifecycleHookFunction.Arn}
+      Protocol: lambda
+      TopicArn: !Ref LifecycleHookTopic
+  LifecycleHookFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LifecycleHookFunctionLogGroup
+    Properties:
+      Role: !Sub ${LifecycleFunctionRole.Arn}
+      FunctionName: !Sub ${AWS::StackName}-lifecycleHooks
+      Description: !Sub ${AWS::StackName} Autoscaling Lifecycle Hook
+      Environment:
+        Variables:
+          ECS_CLUSTER: !Ref ApplicationCluster
+      Code:
+        ZipFile: |
+          import os, time
+          import json
+          import boto3
+          cluster = os.environ['ECS_CLUSTER']
+          # AWS clients
+          ecs = boto3.client('ecs')
+          sns = boto3.client('sns')
+          autoscaling = boto3.client('autoscaling')
+
+          def handler(event, context):
+            print("Received event %s" % event)
+            for r in event.get('Records'):
+              # Parse SNS message
+              message = json.loads(r['Sns']['Message'])
+              transition, hook = message['LifecycleTransition'], message['LifecycleHookName']
+              group, ec2_instance = message['AutoScalingGroupName'], message['EC2InstanceId']
+              if transition != 'autoscaling:EC2_INSTANCE_TERMINATING':
+                print("Ignoring lifecycle transition %s" % transition)
+                return
+              try:
+                # Get ECS container instance ARN
+                ecs_instance_arns = ecs.list_container_instances(
+                  cluster=cluster
+                )['containerInstanceArns']
+                ecs_instances = ecs.describe_container_instances(
+                  cluster=cluster,
+                  containerInstances=ecs_instance_arns
+                )['containerInstances']
+                # Find ECS container instance with same EC2 instance ID in lifecycle hook message
+                ecs_instance_arn = next((
+                  instance['containerInstanceArn'] for instance in ecs_instances
+                  if instance['ec2InstanceId'] == ec2_instance
+                ), None)
+                if ecs_instance_arn is None:
+                  raise ValueError('Could not locate ECS instance')
+                # Drain instance
+                ecs.update_container_instances_state(
+                  cluster=cluster,
+                  containerInstances=[ecs_instance_arn],
+                  status='DRAINING'
+                )
+                # Check task count on instance every 5 seconds
+                count = 1
+                while count > 0 and context.get_remaining_time_in_millis() > 10000:
+                  status = ecs.describe_container_instances(
+                    cluster=cluster,
+                    containerInstances=[ecs_instance_arn],
+                  )['containerInstances'][0]
+                  count = status['runningTasksCount']
+                  print("Sleeping...")
+                  time.sleep(5)
+                if count == 0:
+                  print("All tasks drained - sending CONTINUE signal")
+                  autoscaling.complete_lifecycle_action(
+                    LifecycleHookName=hook,
+                    AutoScalingGroupName=group,
+                    InstanceId=ec2_instance,
+                    LifecycleActionResult='CONTINUE'
+                  )
+                else:
+                  print("Function timed out - republishing SNS message")
+                  sns.publish(TopicArn=r['Sns']['TopicArn'], Message=r['Sns']['Message'])
+              except Exception as e:
+                print("A failure occurred with exception %s" % e)
+                autoscaling.complete_lifecycle_action(
+                  LifecycleHookName=hook,
+                  AutoScalingGroupName=group,
+                  InstanceId=ec2_instance,
+                  LifecycleActionResult='ABANDON'
+                )
+      Runtime: python3.6
+      MemorySize: 128
+      Timeout: 300
+      Handler: index.handler
+  LifecycleHookFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-lifecycleHooks
+      RetentionInDays: 7
 
 Outputs:
   PublicURL:
