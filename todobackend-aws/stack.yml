@@ -849,12 +849,31 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              - Sid: ListContainerInstances
+                Effect: Allow
+                Action:
+                  - ecs:ListContainerInstances
+                Resource: !Sub ${ApplicationCluster.Arn}
+              - Sid: DescribeContainerInstances
+                Effect: Allow
+                Action:
+                  - ecs:DescribeContainerInstances
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub ${ApplicationCluster.Arn}
               - Sid: ManageLambdaLogs
                 Effect: Allow
                 Action:
                 - logs:CreateLogStream
                 - logs:PutLogEvents
                 Resource: !Sub ${EcsCapacityLogGroup.Arn}
+  EcsCapacityLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-ecsCapacity
+      RetentionInDays: 7
   EcsCapacityFunction:
     Type: AWS::Lambda::Function
     DependsOn:
@@ -863,21 +882,82 @@ Resources:
       Role: !Sub ${EcsCapacityRole.Arn}
       FunctionName: !Sub ${AWS::StackName}-ecsCapacity
       Description: !Sub ${AWS::StackName} ECS Capacity Manager
+      Environment:
+        Variables:
+          MAX_MEMORY: 400
+          MAX_CPU: 250
       Code:
         ZipFile: |
+          import os
           import json
+          import boto3
+          ecs = boto3.client('ecs')
+          CONTAINER_MAX_MEMORY = os.environ['MAX_MEMORY']
+          CONTAINER_MAX_CPU = os.environ['MAX_CPU']
+
+          # Get current CPU
+          def check_cpu(instance):
+            return sum(
+              resource['integerValue']
+              for resource in instance['remainingResources']
+              if resource['name'] == 'CPU'
+            )
+          # Get current memory
+          def check_memory(instance):
+            return sum(
+              resource['integerValue']
+              for resource in instance['remainingResources']
+              if resource['name'] == 'MEMORY'
+            )
+          # Lambda entrypoint
           def handler(event, context):
             print("Received event %s" % json.dumps(event))
+
+            # STEP 1 - COLLECT RESOURCE DATA
+            cluster = event['detail']['clusterArn']
+            # The maximum CPU availble for an idle ECS instance
+            instance_max_cpu = next(
+              resource['integerValue']
+              for resource in event['detail']['registeredResources']
+              if resource['name'] == 'CPU')
+            # The maximum memory availble for an idle ECS instance
+            instance_max_memory = next(
+              resource['integerValue']
+              for resource in event['detail']['registeredResources']
+              if resource['name'] == 'MEMORY')
+            # Get current container capacity based upon CPU and memory
+            instance_arns = ecs.list_container_instances(
+              cluster=cluster
+            )['containerInstanceArns']
+            instances = [
+              instance for instance in ecs.describe_container_instances(
+                cluster=cluster,
+                containerInstances=instance_arns
+              )['containerInstances']
+              if instance['status'] == 'ACTIVE'
+            ]
+            cpu_capacity = 0
+            memory_capacity = 0
+            for instance in instances:
+              cpu_capacity += int(check_cpu(instance)/CONTAINER_MAX_CPU)
+              memory_capacity += int(check_memory(instance)/CONTAINER_MAX_MEMORY)
+            print("Current container cpu capacity of %s" % cpu_capacity)
+            print("Current container memory capacity of %s" % memory_capacity)
+
+            # STEP 2 - CALCULATE OVERALL CONTAINER CAPACITY
+            container_capacity = min(cpu_capacity, memory_capacity)
+            print("Overall container capacity of %s" % container_capacity)
+
+            # STEP 3 - CALCULATE IDLE HOST COUNT
+            idle_hosts = min(
+              cpu_capacity / int(instance_max_cpu / CONTAINER_MAX_CPU),
+              memory_capacity / int(instance_max_memory / CONTAINER_MAX_MEMORY)
+            )
+            print("Overall idle host capacity of %s" % idle_hosts)
       Runtime: python3.6
       MemorySize: 128
       Timeout: 300
       Handler: index.handler
-  EcsCapacityLogGroup:
-    Type: AWS::Logs::LogGroup
-    DeletionPolicy: Delete
-    Properties:
-      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-ecsCapacity
-      RetentionInDays: 7
 
 Outputs:
   PublicURL:
