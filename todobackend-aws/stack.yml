@@ -491,6 +491,10 @@ Resources:
       GroupId: !Ref ApplicationAutoscalingSecurityGroup
       DestinationSecurityGroupId: !Ref ApplicationDatabaseSecurityGroup        
 
+  ApplicationCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: todobackend-cluster
   ApplicationAutoscalingSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -549,19 +553,21 @@ Resources:
             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} \
               --resource ApplicationAutoscaling \
               --region ${AWS::Region}
-  ApplicationCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: todobackend-cluster
   ApplicationAutoscaling:
     Type: AWS::AutoScaling::AutoScalingGroup
     CreationPolicy:
       ResourceSignal:
-        Count: !Ref ApplicationDesiredCount
+        Count: 1
         Timeout: PT15M
     UpdatePolicy:
       AutoScalingRollingUpdate:
-        MinInstancesInService: !Ref ApplicationDesiredCount
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        MinInstancesInService: 1
         MinSuccessfulInstancesPercent: 100
         WaitOnResourceSignals: "true"
         PauseTime: PT15M
@@ -569,7 +575,7 @@ Resources:
       LaunchConfigurationName: !Ref ApplicationAutoscalingLaunchConfiguration
       MinSize: 0
       MaxSize: 4
-      DesiredCapacity: !Ref ApplicationDesiredCount
+      DesiredCapacity: 1
       VPCZoneIdentifier: !Ref ApplicationSubnets
       Tags:
         - Key: Name
@@ -624,6 +630,23 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogStreams
                 Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${AWS::StackName}*
+  ApplicationAutoscalingScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      AutoScalingGroupName: !Ref ApplicationAutoscaling
+      Cooldown: 600
+  ApplicationAutoscalingScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      AutoScalingGroupName: !Ref ApplicationAutoscaling
+      Cooldown: 600
+
 
   LifecycleHook:
     Type: AWS::AutoScaling::LifecycleHook
@@ -849,6 +872,11 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              - Sid: PublishCloudwatchMetrics
+                Effect: Allow
+                Action:
+                  - cloudwatch:putMetricData
+                Resource: "*"
               - Sid: ListContainerInstances
                 Effect: Allow
                 Action:
@@ -891,9 +919,15 @@ Resources:
           import os
           import json
           import boto3
+          import datetime
           ecs = boto3.client('ecs')
-          CONTAINER_MAX_MEMORY = os.environ['MAX_MEMORY']
-          CONTAINER_MAX_CPU = os.environ['MAX_CPU']
+          cloudwatch = boto3.client('cloudwatch')
+          # This creates strings as variables - need to cast to int to stop error in function
+          # hard-code for now to get it working
+          # CONTAINER_MAX_MEMORY = os.environ['MAX_MEMORY']
+          # CONTAINER_MAX_CPU = os.environ['MAX_CPU']
+          CONTAINER_MAX_MEMORY = 400
+          CONTAINER_MAX_CPU = 250
 
           # Get current CPU
           def check_cpu(instance):
@@ -954,10 +988,71 @@ Resources:
               memory_capacity / int(instance_max_memory / CONTAINER_MAX_MEMORY)
             )
             print("Overall idle host capacity of %s" % idle_hosts)
+
+            # STEP 4 - PUBLISH CLOUDWATCH METRICS
+            cloudwatch.put_metric_data(
+              Namespace='AWS/ECS',
+              MetricData=[
+              {
+                'MetricName': 'ContainerCapacity',
+                'Dimensions': [{
+                  'Name': 'ClusterName',
+                  'Value': cluster.split('/')[-1]
+                }],
+                'Timestamp': datetime.datetime.utcnow(),
+                'Value': container_capacity
+              }, 
+              {
+                'MetricName': 'IdleHostCapacity',
+                'Dimensions': [{
+                  'Name': 'ClusterName',
+                  'Value': cluster.split('/')[-1]
+                }],
+                'Timestamp': datetime.datetime.utcnow(),
+                'Value': idle_hosts
+              }
+            ])
+
       Runtime: python3.6
       MemorySize: 128
       Timeout: 300
       Handler: index.handler
+  ContainerCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: ECS Cluster Container Free Capacity
+      AlarmActions:
+        - !Ref ApplicationAutoscalingScaleOutPolicy
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ApplicationCluster
+      MetricName: ContainerCapacity 
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: ignore
+  IdleHostCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: ECS Cluster Idle Host Capacity
+      AlarmActions:
+        - !Ref ApplicationAutoscalingScaleInPolicy
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ApplicationCluster
+      MetricName: IdleHostCapacity
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: ignore
+
+
 
 Outputs:
   PublicURL:
