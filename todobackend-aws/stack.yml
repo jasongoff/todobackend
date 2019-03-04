@@ -1051,8 +1051,103 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: ignore
-
-
+  ApplicationServiceLowCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref ApplicationServiceAutoscalingScaleInPolicy
+      AlarmDescription: Todobackend Service Low CPU 
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ApplicationCluster
+        - Name: ServiceName
+          Value: !Sub ${ApplicationService.Name}
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 20
+      ComparisonOperator: LessThanThreshold
+  ApplicationServiceHighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref ApplicationServiceAutoscalingScaleOutPolicy
+      AlarmDescription: Todobackend Service High CPU 
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ApplicationCluster
+        - Name: ServiceName
+          Value: !Sub ${ApplicationService.Name}
+      MetricName: CPUUtilization
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 40
+      ComparisonOperator: GreaterThanThreshold
+  ApplicationServiceAutoscalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ResourceId: !Sub service/${ApplicationCluster}/${ApplicationService.Name}
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: 1
+      MaxCapacity: 4
+      RoleARN: !Sub ${ApplicationServiceAutoscalingRole.Arn}
+  ApplicationServiceAutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+      Policies:
+        - PolicyName: AutoscalingPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                - application-autoscaling:DescribeScalableTargets
+                - application-autoscaling:DescribeScalingActivities
+                - application-autoscaling:DescribeScalingPolicies
+                - cloudwatch:DescribeAlarms
+                - cloudwatch:PutMetricAlarm
+                - ecs:DescribeServices
+                - ecs:UpdateService
+                Resource: "*"
+  ApplicationServiceAutoscalingScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ScaleIn
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ApplicationServiceAutoscalingTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 360
+        MetricAggregationType: Average
+        StepAdjustments:
+        - ScalingAdjustment: -1
+          MetricIntervalUpperBound: 0
+  ApplicationServiceAutoscalingScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ScaleOut
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ApplicationServiceAutoscalingTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 360
+        MetricAggregationType: Average
+        StepAdjustments:
+          - ScalingAdjustment: 1
+            MetricIntervalLowerBound: 0    
 
 Outputs:
   PublicURL:
