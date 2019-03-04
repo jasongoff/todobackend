@@ -1,9 +1,0 @@
-aws cloudformation deploy --template-file stack.yml \
-    --stack-name todobackend --parameter-overrides $(cat dev.cfg) \
-    --capabilities CAPABILITY_NAMED_IAM
-
-aws secretsmanager get-secret-value --secret-id todobackend/credentials \
-    --query SecretString --output text \
-    | jq -r 'to_entries[] | "export \(.key)='\''\(.value)'\''"'
-
-    
