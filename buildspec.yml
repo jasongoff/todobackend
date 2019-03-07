@@ -13,8 +13,11 @@ phases:
       - make test
       - make release
       - make publish
+      - make version > version.json
   post_build:
     commands:
       - make clean
       - make logout
-      
+artifacts:
+  files:
+    - version.json
